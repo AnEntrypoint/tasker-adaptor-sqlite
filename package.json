@@ -21,7 +21,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^9.2.2",
+    "sql.js": "^1.10.2",
     "tasker-adaptor": "^1.0.0"
   },
   "peerDependencies": {

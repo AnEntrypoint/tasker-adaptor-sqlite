@@ -1,10 +1,17 @@
-import Database from 'better-sqlite3';
+import initSqlJs from 'sql.js';
 import { StorageAdapter } from 'tasker-adaptor';
+import fs from 'fs';
+import path from 'path';
 
-/**
- * SQLite storage adapter
- * Stores task data in a local SQLite database
- */
+let SQL;
+
+const initSQL = async () => {
+  if (!SQL) {
+    SQL = await initSqlJs();
+  }
+  return SQL;
+};
+
 export class SQLiteAdapter extends StorageAdapter {
   constructor(dbPath = ':memory:') {
     super();
@@ -13,14 +20,35 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   async init() {
-    this.db = new Database(this.dbPath);
-    this.db.pragma('journal_mode = WAL');
+    await initSQL();
+
+    if (this.dbPath === ':memory:') {
+      this.db = new SQL.Database();
+    } else {
+      try {
+        const dir = path.dirname(this.dbPath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        if (fs.existsSync(this.dbPath)) {
+          const buffer = fs.readFileSync(this.dbPath);
+          this.db = new SQL.Database(buffer);
+        } else {
+          this.db = new SQL.Database();
+        }
+      } catch (err) {
+        console.error('Error loading database:', err);
+        this.db = new SQL.Database();
+      }
+    }
+
     await this._createTables();
   }
 
   async _createTables() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS task_runs (
+    const statements = [
+      `CREATE TABLE IF NOT EXISTS task_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_identifier TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
@@ -29,9 +57,9 @@ export class SQLiteAdapter extends StorageAdapter {
         error TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+      )`,
 
-      CREATE TABLE IF NOT EXISTS stack_runs (
+      `CREATE TABLE IF NOT EXISTS stack_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_run_id INTEGER NOT NULL REFERENCES task_runs(id),
         parent_stack_run_id INTEGER,
@@ -44,48 +72,60 @@ export class SQLiteAdapter extends StorageAdapter {
         resume_payload TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+      )`,
 
-      CREATE TABLE IF NOT EXISTS task_functions (
+      `CREATE TABLE IF NOT EXISTS task_functions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         identifier TEXT NOT NULL UNIQUE,
         code TEXT NOT NULL,
         metadata TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+      )`,
 
-      CREATE TABLE IF NOT EXISTS keystore (
+      `CREATE TABLE IF NOT EXISTS keystore (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         key TEXT NOT NULL UNIQUE,
         value TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+      )`,
 
-      CREATE INDEX IF NOT EXISTS idx_task_runs_identifier ON task_runs(task_identifier);
-      CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
-      CREATE INDEX IF NOT EXISTS idx_stack_runs_task ON stack_runs(task_run_id);
-      CREATE INDEX IF NOT EXISTS idx_stack_runs_status ON stack_runs(status);
-      CREATE INDEX IF NOT EXISTS idx_stack_runs_parent ON stack_runs(parent_stack_run_id);
-    `);
+      `CREATE INDEX IF NOT EXISTS idx_task_runs_identifier ON task_runs(task_identifier)`,
+      `CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_stack_runs_task ON stack_runs(task_run_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_stack_runs_status ON stack_runs(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_stack_runs_parent ON stack_runs(parent_stack_run_id)`
+    ];
+
+    for (const stmt of statements) {
+      try {
+        this.db.run(stmt);
+      } catch (err) {
+        if (!err.message.includes('already exists')) {
+          console.error('Error creating table:', err);
+        }
+      }
+    }
   }
 
   async createTaskRun(taskRun) {
-    const stmt = this.db.prepare(`
+    const sql = `
       INSERT INTO task_runs (task_identifier, status, input, result, error)
       VALUES (?, ?, ?, ?, ?)
-    `);
+    `;
 
-    const info = stmt.run(
+    this.db.run(sql, [
       taskRun.task_identifier,
       taskRun.status || 'pending',
       taskRun.input ? JSON.stringify(taskRun.input) : null,
       taskRun.result ? JSON.stringify(taskRun.result) : null,
       taskRun.error ? JSON.stringify(taskRun.error) : null
-    );
+    ]);
 
-    return this._getTaskRunById(info.lastInsertRowid);
+    const result = this.db.exec('SELECT last_insert_rowid() as id');
+    const lastId = result[0]?.values[0]?.[0];
+    return this._getTaskRunById(lastId);
   }
 
   async getTaskRun(id) {
@@ -93,9 +133,17 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   _getTaskRunById(id) {
-    const stmt = this.db.prepare('SELECT * FROM task_runs WHERE id = ?');
-    const row = stmt.get(id);
-    return row ? this._parseTaskRun(row) : null;
+    const result = this.db.exec('SELECT * FROM task_runs WHERE id = ?', [id]);
+    if (!result[0]) return null;
+
+    const row = result[0];
+    const cols = row.columns;
+    const values = row.values[0];
+
+    const obj = {};
+    cols.forEach((col, i) => obj[col] = values[i]);
+
+    return this._parseTaskRun(obj);
   }
 
   _parseTaskRun(row) {
@@ -121,13 +169,13 @@ export class SQLiteAdapter extends StorageAdapter {
     });
 
     const setClause = keys.map(k => `${k} = ?`).join(', ');
-    const stmt = this.db.prepare(`
+    const sql = `
       UPDATE task_runs
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `);
+    `;
 
-    stmt.run(...values, id);
+    this.db.run(sql, [...values, id]);
     return this._getTaskRunById(id);
   }
 
@@ -140,18 +188,24 @@ export class SQLiteAdapter extends StorageAdapter {
       values.push(value);
     });
 
-    const stmt = this.db.prepare(sql);
-    const rows = stmt.all(...values);
-    return rows.map(r => this._parseTaskRun(r));
+    const result = this.db.exec(sql, values);
+    if (!result[0]) return [];
+
+    const cols = result[0].columns;
+    return result[0].values.map(row => {
+      const obj = {};
+      cols.forEach((col, i) => obj[col] = row[i]);
+      return this._parseTaskRun(obj);
+    });
   }
 
   async createStackRun(stackRun) {
-    const stmt = this.db.prepare(`
+    const sql = `
       INSERT INTO stack_runs (task_run_id, parent_stack_run_id, operation, status, input, result, error)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
+    `;
 
-    const info = stmt.run(
+    this.db.run(sql, [
       stackRun.task_run_id,
       stackRun.parent_stack_run_id || null,
       stackRun.operation,
@@ -159,9 +213,11 @@ export class SQLiteAdapter extends StorageAdapter {
       stackRun.input ? JSON.stringify(stackRun.input) : null,
       stackRun.result ? JSON.stringify(stackRun.result) : null,
       stackRun.error ? JSON.stringify(stackRun.error) : null
-    );
+    ]);
 
-    return this._getStackRunById(info.lastInsertRowid);
+    const result = this.db.exec('SELECT last_insert_rowid() as id');
+    const lastId = result[0]?.values[0]?.[0];
+    return this._getStackRunById(lastId);
   }
 
   async getStackRun(id) {
@@ -169,9 +225,17 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   _getStackRunById(id) {
-    const stmt = this.db.prepare('SELECT * FROM stack_runs WHERE id = ?');
-    const row = stmt.get(id);
-    return row ? this._parseStackRun(row) : null;
+    const result = this.db.exec('SELECT * FROM stack_runs WHERE id = ?', [id]);
+    if (!result[0]) return null;
+
+    const row = result[0];
+    const cols = row.columns;
+    const values = row.values[0];
+
+    const obj = {};
+    cols.forEach((col, i) => obj[col] = values[i]);
+
+    return this._parseStackRun(obj);
   }
 
   _parseStackRun(row) {
@@ -201,13 +265,13 @@ export class SQLiteAdapter extends StorageAdapter {
     });
 
     const setClause = keys.map(k => `${k} = ?`).join(', ');
-    const stmt = this.db.prepare(`
+    const sql = `
       UPDATE stack_runs
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `);
+    `;
 
-    stmt.run(...values, id);
+    this.db.run(sql, [...values, id]);
     return this._getStackRunById(id);
   }
 
@@ -225,80 +289,108 @@ export class SQLiteAdapter extends StorageAdapter {
       }
     });
 
-    const stmt = this.db.prepare(sql);
-    const rows = stmt.all(...values);
-    return rows.map(r => this._parseStackRun(r));
+    const result = this.db.exec(sql, values);
+    if (!result[0]) return [];
+
+    const cols = result[0].columns;
+    return result[0].values.map(row => {
+      const obj = {};
+      cols.forEach((col, i) => obj[col] = row[i]);
+      return this._parseStackRun(obj);
+    });
   }
 
   async getPendingStackRuns() {
-    const stmt = this.db.prepare(`
+    const sql = `
       SELECT * FROM stack_runs
       WHERE status IN ('pending', 'suspended_waiting_child')
       ORDER BY created_at ASC
-    `);
+    `;
 
-    const rows = stmt.all();
-    return rows.map(r => this._parseStackRun(r));
+    const result = this.db.exec(sql);
+    if (!result[0]) return [];
+
+    const cols = result[0].columns;
+    return result[0].values.map(row => {
+      const obj = {};
+      cols.forEach((col, i) => obj[col] = row[i]);
+      return this._parseStackRun(obj);
+    });
   }
 
   async storeTaskFunction(taskFunction) {
-    const stmt = this.db.prepare(`
+    const sql = `
       INSERT OR REPLACE INTO task_functions (identifier, code, metadata)
       VALUES (?, ?, ?)
-    `);
+    `;
 
-    stmt.run(
+    this.db.run(sql, [
       taskFunction.identifier,
       taskFunction.code,
       taskFunction.metadata ? JSON.stringify(taskFunction.metadata) : null
-    );
+    ]);
 
     return this.getTaskFunction(taskFunction.identifier);
   }
 
   async getTaskFunction(identifier) {
-    const stmt = this.db.prepare('SELECT * FROM task_functions WHERE identifier = ?');
-    const row = stmt.get(identifier);
-    if (!row) return null;
+    const result = this.db.exec('SELECT * FROM task_functions WHERE identifier = ?', [identifier]);
+    if (!result[0]) return null;
+
+    const row = result[0];
+    const cols = row.columns;
+    const values = row.values[0];
+
+    const obj = {};
+    cols.forEach((col, i) => obj[col] = values[i]);
 
     return {
-      id: row.id,
-      identifier: row.identifier,
-      code: row.code,
-      metadata: row.metadata ? JSON.parse(row.metadata) : null,
-      created_at: row.created_at,
-      updated_at: row.updated_at
+      id: obj.id,
+      identifier: obj.identifier,
+      code: obj.code,
+      metadata: obj.metadata ? JSON.parse(obj.metadata) : null,
+      created_at: obj.created_at,
+      updated_at: obj.updated_at
     };
   }
 
   async setKeystore(key, value) {
-    const stmt = this.db.prepare(`
+    const sql = `
       INSERT OR REPLACE INTO keystore (key, value)
       VALUES (?, ?)
-    `);
+    `;
 
     const valueStr = typeof value === 'string' ? value : JSON.stringify(value);
-    stmt.run(key, valueStr);
+    this.db.run(sql, [key, valueStr]);
   }
 
   async getKeystore(key) {
-    const stmt = this.db.prepare('SELECT value FROM keystore WHERE key = ?');
-    const row = stmt.get(key);
-    if (!row) return null;
+    const result = this.db.exec('SELECT value FROM keystore WHERE key = ?', [key]);
+    if (!result[0]) return null;
 
+    const value = result[0].values[0][0];
     try {
-      return JSON.parse(row.value);
+      return JSON.parse(value);
     } catch (e) {
-      return row.value;
+      return value;
     }
   }
 
   async deleteKeystore(key) {
-    const stmt = this.db.prepare('DELETE FROM keystore WHERE key = ?');
-    stmt.run(key);
+    this.db.run('DELETE FROM keystore WHERE key = ?', [key]);
   }
 
   async close() {
+    if (this.db && this.dbPath !== ':memory:') {
+      try {
+        const data = this.db.export();
+        const buffer = Buffer.from(data);
+        fs.writeFileSync(this.dbPath, buffer);
+      } catch (err) {
+        console.error('Error saving database:', err);
+      }
+    }
+
     if (this.db) {
       this.db.close();
     }
