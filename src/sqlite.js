@@ -116,8 +116,8 @@ export class SQLiteAdapter extends StorageAdapter {
     `;
 
     this.db.run(sql, [
-      taskRun.task_identifier,
-      taskRun.status || 'pending',
+      taskRun.task_identifier ?? null,
+      taskRun.status ?? 'pending',
       taskRun.input ? JSON.stringify(taskRun.input) : null,
       taskRun.result ? JSON.stringify(taskRun.result) : null,
       taskRun.error ? JSON.stringify(taskRun.error) : null
@@ -163,9 +163,9 @@ export class SQLiteAdapter extends StorageAdapter {
     const keys = Object.keys(updates);
     const values = keys.map(k => {
       const v = updates[k];
-      if (v === null) return null;
+      if (v === null || v === undefined) return null;
       if (typeof v === 'object') return JSON.stringify(v);
-      return v;
+      return v ?? null;
     });
 
     const setClause = keys.map(k => `${k} = ?`).join(', ');
@@ -206,10 +206,10 @@ export class SQLiteAdapter extends StorageAdapter {
     `;
 
     this.db.run(sql, [
-      stackRun.task_run_id,
-      stackRun.parent_stack_run_id || null,
-      stackRun.operation,
-      stackRun.status || 'pending',
+      stackRun.task_run_id ?? null,
+      stackRun.parent_stack_run_id ?? null,
+      stackRun.operation ?? null,
+      stackRun.status ?? 'pending',
       stackRun.input ? JSON.stringify(stackRun.input) : null,
       stackRun.result ? JSON.stringify(stackRun.result) : null,
       stackRun.error ? JSON.stringify(stackRun.error) : null
@@ -259,9 +259,9 @@ export class SQLiteAdapter extends StorageAdapter {
     const keys = Object.keys(updates);
     const values = keys.map(k => {
       const v = updates[k];
-      if (v === null) return null;
+      if (v === null || v === undefined) return null;
       if (typeof v === 'object') return JSON.stringify(v);
-      return v;
+      return v ?? null;
     });
 
     const setClause = keys.map(k => `${k} = ?`).join(', ');
