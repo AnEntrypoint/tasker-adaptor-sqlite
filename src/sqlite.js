@@ -1,6 +1,7 @@
 import initSqlJs from 'sql.js';
 import { StorageAdapter } from 'tasker-adaptor';
 import { Serializer, CRUDPatterns, RECORD_TYPES } from 'tasker-storage-utils';
+import logger from 'tasker-logging';
 import fs from 'fs';
 import path from 'path';
 
@@ -41,7 +42,7 @@ export class SQLiteAdapter extends StorageAdapter {
           this.db = new SQL.Database();
         }
       } catch (err) {
-        console.error('Error loading database:', err);
+        logger.error('Error loading database', { error: err.message, dbPath: this.dbPath });
         this.db = new SQL.Database();
       }
     }
@@ -106,7 +107,7 @@ export class SQLiteAdapter extends StorageAdapter {
         this.db.run(stmt);
       } catch (err) {
         if (!err.message.includes('already exists')) {
-          console.error('Error creating table:', err);
+          logger.error('Error creating table', { error: err.message, statement: stmt.substring(0, 50) });
         }
       }
     }
@@ -359,7 +360,7 @@ export class SQLiteAdapter extends StorageAdapter {
         const buffer = Buffer.from(data);
         fs.writeFileSync(this.dbPath, buffer);
       } catch (err) {
-        console.error('Error saving database:', err);
+        logger.error('Error saving database', { error: err.message, dbPath: this.dbPath });
       }
     }
 
