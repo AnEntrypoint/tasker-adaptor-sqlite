@@ -1,5 +1,6 @@
 import initSqlJs from 'sql.js';
 import { StorageAdapter } from 'tasker-adaptor';
+import { Serializer, CRUDPatterns, RECORD_TYPES } from 'tasker-storage-utils';
 import fs from 'fs';
 import path from 'path';
 
@@ -17,6 +18,8 @@ export class SQLiteAdapter extends StorageAdapter {
     super();
     this.dbPath = dbPath;
     this.db = null;
+    this.serializer = new Serializer();
+    this.crudPatterns = new CRUDPatterns();
   }
 
   async init() {
@@ -110,17 +113,19 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   async createTaskRun(taskRun) {
+    const prepared = this.crudPatterns.buildTaskRunCreate(taskRun);
+
     const sql = `
       INSERT INTO task_runs (task_identifier, status, input, result, error)
       VALUES (?, ?, ?, ?, ?)
     `;
 
     this.db.run(sql, [
-      taskRun.task_identifier ?? null,
-      taskRun.status ?? 'pending',
-      taskRun.input ? JSON.stringify(taskRun.input) : null,
-      taskRun.result ? JSON.stringify(taskRun.result) : null,
-      taskRun.error ? JSON.stringify(taskRun.error) : null
+      prepared.task_identifier ?? null,
+      prepared.status ?? 'pending',
+      prepared.input || null,
+      prepared.result || null,
+      prepared.error || null
     ]);
 
     const result = this.db.exec('SELECT last_insert_rowid() as id');
@@ -147,26 +152,14 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   _parseTaskRun(row) {
-    return {
-      id: row.id,
-      task_identifier: row.task_identifier,
-      status: row.status,
-      input: row.input ? JSON.parse(row.input) : null,
-      result: row.result ? JSON.parse(row.result) : null,
-      error: row.error ? JSON.parse(row.error) : null,
-      created_at: row.created_at,
-      updated_at: row.updated_at
-    };
+    const deserialized = this.serializer.deserializeRecord(row);
+    return this.crudPatterns.normalizeTaskRunRecord(deserialized);
   }
 
   async updateTaskRun(id, updates) {
-    const keys = Object.keys(updates);
-    const values = keys.map(k => {
-      const v = updates[k];
-      if (v === null || v === undefined) return null;
-      if (typeof v === 'object') return JSON.stringify(v);
-      return v ?? null;
-    });
+    const prepared = this.crudPatterns.buildTaskRunUpdate(updates);
+    const keys = Object.keys(prepared);
+    const values = keys.map(k => prepared[k]);
 
     const setClause = keys.map(k => `${k} = ?`).join(', ');
     const sql = `
@@ -200,19 +193,21 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   async createStackRun(stackRun) {
+    const prepared = this.crudPatterns.buildStackRunCreate(stackRun);
+
     const sql = `
       INSERT INTO stack_runs (task_run_id, parent_stack_run_id, operation, status, input, result, error)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
 
     this.db.run(sql, [
-      stackRun.task_run_id ?? null,
-      stackRun.parent_stack_run_id ?? null,
-      stackRun.operation ?? null,
-      stackRun.status ?? 'pending',
-      stackRun.input ? JSON.stringify(stackRun.input) : null,
-      stackRun.result ? JSON.stringify(stackRun.result) : null,
-      stackRun.error ? JSON.stringify(stackRun.error) : null
+      prepared.task_run_id ?? null,
+      prepared.parent_stack_run_id ?? null,
+      prepared.operation ?? null,
+      prepared.status ?? 'pending',
+      prepared.input || null,
+      prepared.result || null,
+      prepared.error || null
     ]);
 
     const result = this.db.exec('SELECT last_insert_rowid() as id');
@@ -239,30 +234,14 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   _parseStackRun(row) {
-    return {
-      id: row.id,
-      task_run_id: row.task_run_id,
-      parent_stack_run_id: row.parent_stack_run_id,
-      operation: row.operation,
-      status: row.status,
-      input: row.input ? JSON.parse(row.input) : null,
-      result: row.result ? JSON.parse(row.result) : null,
-      error: row.error ? JSON.parse(row.error) : null,
-      suspended_at: row.suspended_at,
-      resume_payload: row.resume_payload ? JSON.parse(row.resume_payload) : null,
-      created_at: row.created_at,
-      updated_at: row.updated_at
-    };
+    const deserialized = this.serializer.deserializeRecord(row);
+    return this.crudPatterns.normalizeStackRunRecord(deserialized);
   }
 
   async updateStackRun(id, updates) {
-    const keys = Object.keys(updates);
-    const values = keys.map(k => {
-      const v = updates[k];
-      if (v === null || v === undefined) return null;
-      if (typeof v === 'object') return JSON.stringify(v);
-      return v ?? null;
-    });
+    const prepared = this.crudPatterns.buildStackRunUpdate(updates);
+    const keys = Object.keys(prepared);
+    const values = keys.map(k => prepared[k]);
 
     const setClause = keys.map(k => `${k} = ?`).join(', ');
     const sql = `
@@ -319,18 +298,20 @@ export class SQLiteAdapter extends StorageAdapter {
   }
 
   async storeTaskFunction(taskFunction) {
+    const prepared = this.crudPatterns.buildTaskFunctionCreate(taskFunction);
+
     const sql = `
       INSERT OR REPLACE INTO task_functions (identifier, code, metadata)
       VALUES (?, ?, ?)
     `;
 
     this.db.run(sql, [
-      taskFunction.identifier,
-      taskFunction.code,
-      taskFunction.metadata ? JSON.stringify(taskFunction.metadata) : null
+      prepared.identifier || taskFunction.identifier,
+      prepared.code,
+      prepared.metadata || null
     ]);
 
-    return this.getTaskFunction(taskFunction.identifier);
+    return this.getTaskFunction(prepared.identifier || taskFunction.identifier);
   }
 
   async getTaskFunction(identifier) {
@@ -344,24 +325,19 @@ export class SQLiteAdapter extends StorageAdapter {
     const obj = {};
     cols.forEach((col, i) => obj[col] = values[i]);
 
-    return {
-      id: obj.id,
-      identifier: obj.identifier,
-      code: obj.code,
-      metadata: obj.metadata ? JSON.parse(obj.metadata) : null,
-      created_at: obj.created_at,
-      updated_at: obj.updated_at
-    };
+    const deserialized = this.serializer.deserializeRecord(obj);
+    return this.crudPatterns.normalizeTaskFunctionRecord(deserialized);
   }
 
   async setKeystore(key, value) {
+    const prepared = this.crudPatterns.buildKeystoreCreate({ key, value });
+
     const sql = `
       INSERT OR REPLACE INTO keystore (key, value)
       VALUES (?, ?)
     `;
 
-    const valueStr = typeof value === 'string' ? value : JSON.stringify(value);
-    this.db.run(sql, [key, valueStr]);
+    this.db.run(sql, [prepared.key, prepared.value]);
   }
 
   async getKeystore(key) {
@@ -369,11 +345,7 @@ export class SQLiteAdapter extends StorageAdapter {
     if (!result[0]) return null;
 
     const value = result[0].values[0][0];
-    try {
-      return JSON.parse(value);
-    } catch (e) {
-      return value;
-    }
+    return this.serializer.deserializeObject(value);
   }
 
   async deleteKeystore(key) {

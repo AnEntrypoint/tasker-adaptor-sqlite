@@ -22,7 +22,9 @@
   "license": "MIT",
   "dependencies": {
     "sql.js": "^1.10.2",
-    "tasker-adaptor": "^1.0.0"
+    "tasker-adaptor": "^1.0.0",
+    "tasker-storage-utils": "^1.0.0",
+    "tasker-validators": "^1.0.0"
   },
   "peerDependencies": {
     "sequential-flow": "^1.0.0"
