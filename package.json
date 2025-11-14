@@ -1,7 +1,7 @@
 {
-  "name": "tasker-adaptor-sqlite",
+  "name": "sequential-adaptor-sqlite",
   "version": "1.0.0",
-  "description": "SQLite storage backend for tasker-sequential via tasker-adaptor",
+  "description": "SQLite storage backend for sequential-runner via tasker-adaptor",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -11,7 +11,7 @@
     "test": "node tests/test-sqlite-adapter.js"
   },
   "keywords": [
-    "tasker",
+    "sequential",
     "sequential",
     "adapter",
     "storage",
@@ -22,9 +22,9 @@
   "license": "MIT",
   "dependencies": {
     "sql.js": "^1.10.2",
-    "tasker-adaptor": "^1.0.0",
-    "tasker-storage-utils": "^1.0.0",
-    "tasker-validators": "^1.0.0"
+    "sequential-adaptor": "^1.0.0",
+    "sequential-storage-utils": "^1.0.0",
+    "sequential-validators": "^1.0.0"
   },
   "peerDependencies": {
     "sequential-flow": "^1.0.0"
