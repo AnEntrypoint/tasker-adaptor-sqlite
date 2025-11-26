@@ -1,6 +1,6 @@
 import initSqlJs from 'sql.js';
-import { StorageAdapter } from 'tasker-adaptor';
-import { Serializer, CRUDPatterns, RECORD_TYPES } from 'tasker-storage-utils';
+import { StorageAdapter } from 'sequential-adaptor';
+import { Serializer, CRUDPatterns, RECORD_TYPES } from 'sequential-storage-utils';
 import logger from 'tasker-logging';
 import fs from 'fs';
 import path from 'path';

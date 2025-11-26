@@ -7,19 +7,22 @@
   "exports": {
     ".": "./src/index.js"
   },
-  "scripts": {
-    "test": "node tests/test-sqlite-adapter.js"
-  },
+  "files": [
+    "src"
+  ],
   "keywords": [
-    "sequential",
     "sequential",
     "adapter",
     "storage",
     "sqlite",
     "database"
   ],
-  "author": "",
+  "author": "lanmower",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnEntrypoint/sequential-adaptor-sqlite.git"
+  },
   "dependencies": {
     "sql.js": "^1.10.2",
     "sequential-adaptor": "^1.0.0",
@@ -28,5 +31,8 @@
   },
   "peerDependencies": {
     "sequential-flow": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
