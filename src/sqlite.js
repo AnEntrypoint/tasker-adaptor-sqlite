@@ -1,8 +1,9 @@
 import initSqlJs from 'sql.js';
-import { StorageAdapter } from 'sequential-adaptor';
-import { Serializer, CRUDPatterns, RECORD_TYPES } from 'sequential-storage-utils';
-import logger from 'sequential-logging';
-import fs from 'fs';
+import { StorageAdapter } from '@sequential/sequential-adaptor';
+import { Serializer, CRUDPatterns, RECORD_TYPES } from '@sequential/sequential-storage-utils';
+import logger from '@sequential/sequential-logging';
+import { existsSync } from 'fs';
+import { ensureDir, readFile, writeFile } from 'fs-extra';
 import path from 'path';
 
 let SQL;
@@ -31,12 +32,10 @@ export class SQLiteAdapter extends StorageAdapter {
     } else {
       try {
         const dir = path.dirname(this.dbPath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
+        await ensureDir(dir);
 
-        if (fs.existsSync(this.dbPath)) {
-          const buffer = fs.readFileSync(this.dbPath);
+        if (existsSync(this.dbPath)) {
+          const buffer = await readFile(this.dbPath);
           this.db = new SQL.Database(buffer);
         } else {
           this.db = new SQL.Database();
@@ -358,7 +357,7 @@ export class SQLiteAdapter extends StorageAdapter {
       try {
         const data = this.db.export();
         const buffer = Buffer.from(data);
-        fs.writeFileSync(this.dbPath, buffer);
+        await writeFile(this.dbPath, buffer);
       } catch (err) {
         logger.error('Error saving database', { error: err.message, dbPath: this.dbPath });
       }
