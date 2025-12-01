@@ -10,6 +10,9 @@
   "files": [
     "src"
   ],
+  "scripts": {
+    "test": "node --test test/**/*.js"
+  },
   "keywords": [
     "sequential",
     "adapter",
@@ -26,6 +29,7 @@
   "dependencies": {
     "sql.js": "^1.10.2",
     "sequential-adaptor": "^1.0.0",
+    "sequential-logging": "^1.0.0",
     "sequential-storage-utils": "^1.0.0",
     "sequential-validators": "^1.0.0"
   },
