@@ -369,5 +369,3 @@ export class SQLiteAdapter extends StorageAdapter {
     }
   }
 }
-
-export default SQLiteAdapter;
