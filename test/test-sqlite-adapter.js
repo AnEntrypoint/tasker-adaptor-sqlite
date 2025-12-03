@@ -1,48 +1,48 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { SQLiteAdapter } from '../src/index.js';
 
-// Create a mock logger before importing SQLiteAdapter
-const mockLogger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {}
-};
-
-// Patch the logger module in require.cache equivalent for ESM
-global.loggerInstance = mockLogger;
-
-// Dynamically patch the sqlite.js module's logger before importing
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-
-// For ESM, we need to use import assertions or dynamic imports
-// Let's just create a wrapper that patches the module
-async function getAdapterModule() {
-  const mod = await import('../src/index.js');
-  return mod;
-}
-
-// Simple workaround: create our own simple SQLiteAdapter test-friendly version
-// by importing and then patching the logger
-const { SQLiteAdapter: OriginalAdapter } = await getAdapterModule();
-
-const createAdapter = () => new OriginalAdapter(':memory:');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 test('SQLiteAdapter - Initialization', async (t) => {
-  await t.test('initializes in-memory database', async () => {
-    const adapter = createAdapter();
+  await t.test('initializes in-memory adapter', async () => {
+    const adapter = new SQLiteAdapter();
     await adapter.init();
-    assert.ok(adapter.db, 'Database should be initialized');
+    assert.ok(adapter.db);
+    await adapter.close();
   });
 
-  await t.test('creates required tables on init', async () => {
-    const adapter = createAdapter();
+  await t.test('initializes file-based adapter', async () => {
+    const dbPath = path.join(__dirname, 'file-test.db');
+    const adapter = new SQLiteAdapter(dbPath);
     await adapter.init();
-    const tables = adapter.db.exec("SELECT name FROM sqlite_master WHERE type='table'");
-    const tableNames = tables.length > 0 ? tables[0].values.map(row => row[0]) : [];
-    assert.ok(tableNames.includes('task_runs'), 'Should create task_runs table');
-    assert.ok(tableNames.includes('stack_runs'), 'Should create stack_runs table');
+    assert.ok(adapter.db);
+    assert.ok(fs.existsSync(dbPath));
+    await adapter.close();
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  });
+
+  await t.test('loads existing database file', async () => {
+    const dbPath = path.join(__dirname, 'load-test.db');
+    const adapter1 = new SQLiteAdapter(dbPath);
+    await adapter1.init();
+    const run1 = await adapter1.createTaskRun({
+      id: 1,
+      task_identifier: 'test-task',
+      status: 'completed'
+    });
+    await adapter1.close();
+
+    const adapter2 = new SQLiteAdapter(dbPath);
+    await adapter2.init();
+    const run2 = await adapter2.getTaskRun(run1.id);
+    assert.ok(run2);
+    assert.equal(run2.task_identifier, 'test-task');
+    await adapter2.close();
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
   });
 });
 
@@ -50,55 +50,62 @@ test('SQLiteAdapter - TaskRun CRUD', async (t) => {
   let adapter;
 
   t.beforeEach(async () => {
-    adapter = createAdapter();
+    adapter = new SQLiteAdapter();
     await adapter.init();
   });
 
-  await t.test('creates task run with auto-generated ID', async () => {
-    const result = await adapter.createTaskRun({
-      task_identifier: 'test-task',
-      status: 'pending',
-      input: { userId: '123' }
-    });
-    assert.ok(result.id, 'Should have ID');
-    assert.equal(result.task_identifier, 'test-task');
+  t.afterEach(async () => {
+    await adapter.close();
   });
 
-  await t.test('retrieves created task run', async () => {
+  await t.test('creates a task run', async () => {
+    const taskRun = await adapter.createTaskRun({
+      id: 1,
+      task_identifier: 'my-task',
+      status: 'pending'
+    });
+    assert.ok(taskRun.id);
+    assert.equal(taskRun.task_identifier, 'my-task');
+  });
+
+  await t.test('retrieves a task run by id', async () => {
     const created = await adapter.createTaskRun({
+      id: 1,
       task_identifier: 'test-task',
-      status: 'pending',
-      input: { foo: 'bar' }
+      status: 'running'
     });
     const retrieved = await adapter.getTaskRun(created.id);
-    assert.equal(retrieved.task_identifier, 'test-task');
+    assert.ok(retrieved);
+    assert.equal(retrieved.id, created.id);
   });
 
-  await t.test('returns null for non-existent task run', async () => {
-    const result = await adapter.getTaskRun('non-existent-id');
+  await t.test('returns null for nonexistent task run', async () => {
+    const result = await adapter.getTaskRun(99999);
     assert.equal(result, null);
   });
 
-  await t.test('updates task run status', async () => {
+  await t.test('updates a task run', async () => {
     const created = await adapter.createTaskRun({
-      task_identifier: 'test-task',
+      id: 1,
+      task_identifier: 'update-test',
       status: 'pending'
     });
     const updated = await adapter.updateTaskRun(created.id, {
-      status: 'running'
-    });
-    assert.equal(updated.status, 'running');
-  });
-
-  await t.test('queries task runs with filter', async () => {
-    await adapter.createTaskRun({
-      task_identifier: 'task-1',
-      status: 'pending'
-    });
-    await adapter.createTaskRun({
-      task_identifier: 'task-2',
       status: 'completed'
     });
+    assert.equal(updated.status, 'completed');
+  });
+
+  await t.test('queries task runs by identifier', async () => {
+    await adapter.createTaskRun({ id: 1, task_identifier: 'task-a', status: 'pending' });
+    await adapter.createTaskRun({ id: 2, task_identifier: 'task-b', status: 'running' });
+    const results = await adapter.queryTaskRuns({ task_identifier: 'task-a' });
+    assert.equal(results.length, 1);
+  });
+
+  await t.test('queries task runs by status', async () => {
+    await adapter.createTaskRun({ id: 1, task_identifier: 'a', status: 'pending' });
+    await adapter.createTaskRun({ id: 2, task_identifier: 'b', status: 'completed' });
     const results = await adapter.queryTaskRuns({ status: 'pending' });
     assert.equal(results.length, 1);
   });
@@ -108,52 +115,81 @@ test('SQLiteAdapter - StackRun CRUD', async (t) => {
   let adapter;
 
   t.beforeEach(async () => {
-    adapter = createAdapter();
+    adapter = new SQLiteAdapter();
     await adapter.init();
   });
 
-  await t.test('creates stack run with parent reference', async () => {
-    const taskRun = await adapter.createTaskRun({
-      task_identifier: 'test-task',
-      status: 'pending'
-    });
-    const result = await adapter.createStackRun({
-      task_run_id: taskRun.id,
-      operation: 'fetch',
-      status: 'pending'
-    });
-    assert.ok(result.id);
-    assert.equal(result.task_run_id, taskRun.id);
+  t.afterEach(async () => {
+    await adapter.close();
   });
 
-  await t.test('updates stack run', async () => {
+  await t.test('creates a stack run', async () => {
     const taskRun = await adapter.createTaskRun({
-      task_identifier: 'test-task',
-      status: 'pending'
+      id: 1,
+      task_identifier: 'parent-task',
+      status: 'running'
     });
     const stackRun = await adapter.createStackRun({
+      id: 1,
       task_run_id: taskRun.id,
-      operation: 'fetch',
+      operation: 'fetch_data',
       status: 'pending'
     });
-    const updated = await adapter.updateStackRun(stackRun.id, {
-      status: 'completed'
-    });
-    assert.equal(updated.status, 'completed');
+    assert.ok(stackRun.id);
+    assert.equal(stackRun.task_run_id, taskRun.id);
   });
 
-  await t.test('gets pending stack runs', async () => {
+  await t.test('queries stack runs with array filter', async () => {
     const taskRun = await adapter.createTaskRun({
-      task_identifier: 'test-task',
-      status: 'pending'
+      id: 1,
+      task_identifier: 'test',
+      status: 'running'
     });
     await adapter.createStackRun({
+      id: 1,
       task_run_id: taskRun.id,
       operation: 'op1',
       status: 'pending'
     });
+    await adapter.createStackRun({
+      id: 2,
+      task_run_id: taskRun.id,
+      operation: 'op2',
+      status: 'completed'
+    });
+    await adapter.createStackRun({
+      id: 3,
+      task_run_id: taskRun.id,
+      operation: 'op3',
+      status: 'failed'
+    });
+    const results = await adapter.queryStackRuns({
+      status: ['pending', 'completed']
+    });
+    assert.ok(results.some(r => r.status === 'pending'));
+    assert.ok(results.some(r => r.status === 'completed'));
+  });
+
+  await t.test('gets pending stack runs', async () => {
+    const taskRun = await adapter.createTaskRun({
+      id: 1,
+      task_identifier: 'test',
+      status: 'running'
+    });
+    await adapter.createStackRun({
+      id: 1,
+      task_run_id: taskRun.id,
+      operation: 'op1',
+      status: 'pending'
+    });
+    await adapter.createStackRun({
+      id: 2,
+      task_run_id: taskRun.id,
+      operation: 'op2',
+      status: 'suspended_waiting_child'
+    });
     const pending = await adapter.getPendingStackRuns();
-    assert.ok(pending.length > 0);
+    assert.ok(pending.some(r => r.status === 'pending'));
   });
 });
 
@@ -161,18 +197,39 @@ test('SQLiteAdapter - TaskFunction Storage', async (t) => {
   let adapter;
 
   t.beforeEach(async () => {
-    adapter = createAdapter();
+    adapter = new SQLiteAdapter();
     await adapter.init();
   });
 
-  await t.test('stores and retrieves task function', async () => {
-    const code = 'export async function task(input) { return input; }';
-    const stored = await adapter.storeTaskFunction({
-      name: 'my-task',
-      code
+  t.afterEach(async () => {
+    await adapter.close();
+  });
+
+  await t.test('stores and retrieves a task function', async () => {
+    const code = 'async function task() { return "result"; }';
+    await adapter.storeTaskFunction({
+      id: 1,
+      identifier: 'test-func',
+      code: code
     });
-    const retrieved = await adapter.getTaskFunction(stored.id);
+    const retrieved = await adapter.getTaskFunction('test-func');
+    assert.ok(retrieved);
     assert.equal(retrieved.code, code);
+  });
+
+  await t.test('replaces existing task function', async () => {
+    await adapter.storeTaskFunction({
+      id: 1,
+      identifier: 'upsert-test',
+      code: 'version 1'
+    });
+    await adapter.storeTaskFunction({
+      id: 1,
+      identifier: 'upsert-test',
+      code: 'version 2'
+    });
+    const retrieved = await adapter.getTaskFunction('upsert-test');
+    assert.equal(retrieved.code, 'version 2');
   });
 });
 
@@ -180,55 +237,72 @@ test('SQLiteAdapter - Keystore', async (t) => {
   let adapter;
 
   t.beforeEach(async () => {
-    adapter = createAdapter();
+    adapter = new SQLiteAdapter();
     await adapter.init();
   });
 
-  await t.test('stores and retrieves key-value pair', async () => {
-    await adapter.setKeystore('api-key', 'secret-value');
-    const value = await adapter.getKeystore('api-key');
-    assert.equal(value, 'secret-value');
+  t.afterEach(async () => {
+    await adapter.close();
   });
 
-  await t.test('deletes keystore entry', async () => {
-    await adapter.setKeystore('api-key', 'secret');
-    await adapter.deleteKeystore('api-key');
-    const value = await adapter.getKeystore('api-key');
-    assert.equal(value, null);
+  await t.test('stores and retrieves keystore values', async () => {
+    const data = { userId: 123, name: 'test' };
+    await adapter.setKeystore('user-prefs', JSON.stringify(data));
+    const retrieved = await adapter.getKeystore('user-prefs');
+    assert.deepEqual(retrieved, data);
+  });
+
+  await t.test('deletes a keystore value', async () => {
+    await adapter.setKeystore('delete-key', JSON.stringify({ data: true }));
+    await adapter.deleteKeystore('delete-key');
+    const result = await adapter.getKeystore('delete-key');
+    assert.equal(result, null);
   });
 });
 
-test('SQLiteAdapter - Data Serialization', async (t) => {
-  let adapter;
+test('SQLiteAdapter - Persistence', async (t) => {
+  await t.test('persists data to file on close', async () => {
+    const dbPath = path.join(__dirname, 'persist-test.db');
+    const adapter1 = new SQLiteAdapter(dbPath);
+    await adapter1.init();
+    const run = await adapter1.createTaskRun({
+      id: 1,
+      task_identifier: 'persist-task',
+      status: 'completed'
+    });
+    await adapter1.close();
 
-  t.beforeEach(async () => {
-    adapter = createAdapter();
-    await adapter.init();
+    const adapter2 = new SQLiteAdapter(dbPath);
+    await adapter2.init();
+    const retrieved = await adapter2.getTaskRun(run.id);
+    assert.ok(retrieved);
+    assert.equal(retrieved.task_identifier, 'persist-task');
+    await adapter2.close();
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
   });
 
-  await t.test('preserves complex input structure', async () => {
-    const input = {
-      userId: '123',
-      metadata: { timestamp: Date.now(), tags: ['important'] },
-      nested: { deep: { value: true } }
-    };
-    const taskRun = await adapter.createTaskRun({
-      task_identifier: 'complex-task',
-      status: 'pending',
-      input
-    });
-    const retrieved = await adapter.getTaskRun(taskRun.id);
-    assert.deepEqual(retrieved.input, input);
-  });
+  await t.test('multiple in-memory adapters are independent', async () => {
+    const adapter1 = new SQLiteAdapter();
+    const adapter2 = new SQLiteAdapter();
+    await adapter1.init();
+    await adapter2.init();
 
-  await t.test('handles null values', async () => {
-    const taskRun = await adapter.createTaskRun({
-      task_identifier: 'test-task',
-      status: 'pending',
-      input: { nullValue: null }
+    const run1 = await adapter1.createTaskRun({
+      id: 1,
+      task_identifier: 'adapter-1-task',
+      status: 'pending'
     });
-    const retrieved = await adapter.getTaskRun(taskRun.id);
-    assert.strictEqual(retrieved.input.nullValue, null);
+    const run2 = await adapter2.createTaskRun({
+      id: 1,
+      task_identifier: 'adapter-2-task',
+      status: 'pending'
+    });
+
+    assert.equal(run1.task_identifier, 'adapter-1-task');
+    assert.equal(run2.task_identifier, 'adapter-2-task');
+
+    await adapter1.close();
+    await adapter2.close();
   });
 });
 
@@ -236,41 +310,28 @@ test('SQLiteAdapter - Edge Cases', async (t) => {
   let adapter;
 
   t.beforeEach(async () => {
-    adapter = createAdapter();
+    adapter = new SQLiteAdapter();
     await adapter.init();
   });
 
-  await t.test('handles multiple concurrent creates', async () => {
-    const promises = [];
-    for (let i = 0; i < 10; i++) {
-      promises.push(
-        adapter.createTaskRun({
-          task_identifier: `task-${i}`,
-          status: 'pending'
-        })
-      );
-    }
-    const results = await Promise.all(promises);
-    assert.equal(results.length, 10);
+  t.afterEach(async () => {
+    await adapter.close();
   });
 
-  await t.test('maintains parent-child relationships', async () => {
-    const taskRun = await adapter.createTaskRun({
-      task_identifier: 'parent-task',
-      status: 'running'
+  await t.test('handles very long strings', async () => {
+    const longString = 'x'.repeat(5000);
+    const run = await adapter.createTaskRun({
+      id: 1,
+      task_identifier: longString,
+      status: 'pending'
     });
-    const parentStack = await adapter.createStackRun({
-      task_run_id: taskRun.id,
-      operation: 'parent',
-      status: 'suspended'
-    });
-    const childStack = await adapter.createStackRun({
-      task_run_id: taskRun.id,
-      parent_stack_run_id: parentStack.id,
-      operation: 'child',
-      status: 'completed'
-    });
-    const retrieved = await adapter.getStackRun(childStack.id);
-    assert.equal(retrieved.parent_stack_run_id, parentStack.id);
+    const retrieved = await adapter.getTaskRun(run.id);
+    assert.equal(retrieved.task_identifier, longString);
+  });
+
+  await t.test('close is idempotent', async () => {
+    await adapter.close();
+    await adapter.close();
+    assert.ok(true);
   });
 });

@@ -3,7 +3,7 @@ import { StorageAdapter } from '@sequential/sequential-adaptor';
 import { Serializer, CRUDPatterns, RECORD_TYPES } from '@sequential/sequential-storage-utils';
 import logger from '@sequential/sequential-logging';
 import { existsSync } from 'fs';
-import { ensureDir, readFile, writeFile } from 'fs-extra';
+import fse from 'fs-extra';
 import path from 'path';
 
 let SQL;
@@ -32,10 +32,10 @@ export class SQLiteAdapter extends StorageAdapter {
     } else {
       try {
         const dir = path.dirname(this.dbPath);
-        await ensureDir(dir);
+        await fse.ensureDir(dir);
 
         if (existsSync(this.dbPath)) {
-          const buffer = await readFile(this.dbPath);
+          const buffer = await fse.readFile(this.dbPath);
           this.db = new SQL.Database(buffer);
         } else {
           this.db = new SQL.Database();
@@ -357,7 +357,7 @@ export class SQLiteAdapter extends StorageAdapter {
       try {
         const data = this.db.export();
         const buffer = Buffer.from(data);
-        await writeFile(this.dbPath, buffer);
+        await fse.writeFile(this.dbPath, buffer);
       } catch (err) {
         logger.error('Error saving database', { error: err.message, dbPath: this.dbPath });
       }
